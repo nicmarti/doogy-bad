@@ -122,9 +122,11 @@ func main() {
 	var startDateStr string
 	var endDateStr string
 	var resourceFilter string
+	var serviceName string
 	flag.StringVar(&startDateStr, "START_DATE", "", "Start date timestamp in milliseconds")
 	flag.StringVar(&endDateStr, "END_DATE", "", "End date timestamp in milliseconds")
 	flag.StringVar(&resourceFilter, "RESOURCE_FILTER", "", "Resource name filter (e.g., *admin*)")
+	flag.StringVar(&serviceName, "SERVICE", "", "Service name prefix (default: badoom)")
 	flag.Parse()
 
 	// Default dates
@@ -144,6 +146,16 @@ func main() {
 	// Override if RESOURCE_FILTER env var is set
 	if envResourceFilter := os.Getenv("RESOURCE_FILTER"); envResourceFilter != "" && resourceFilter == "" {
 		resourceFilter = envResourceFilter
+	}
+
+	// Override if SERVICE env var is set
+	if envService := os.Getenv("SERVICE"); envService != "" && serviceName == "" {
+		serviceName = envService
+	}
+
+	// Default service name
+	if serviceName == "" {
+		serviceName = "badoom"
 	}
 
 	// RESOURCE_FILTER is mandatory
@@ -168,6 +180,7 @@ func main() {
 	fmt.Printf("Using END_DATE: %d (%s)\n", endDate, endDateTime.Format("2006-01-02 15:04:05"))
 	fmt.Printf("Using RESOURCE_FILTER path: %s\n", resourceFilter)
 	fmt.Printf("Converted to Datadog metric: %v\n", metricName)
+	fmt.Printf("Using SERVICE: %s*\n", serviceName)
 
 	// Initialize Datadog API client
 	ctx := datadog.NewDefaultContext(context.Background())
@@ -195,7 +208,7 @@ func main() {
 					datadogV2.TimeseriesQuery{
 						MetricsTimeseriesQuery: &datadogV2.MetricsTimeseriesQuery{
 							DataSource: datadogV2.METRICSDATASOURCE_METRICS,
-							Query:      fmt.Sprintf("max:trace.django.request.hits{service:badoom*, http.status_code:2*, resource_name:%s} by {resource_name}.as_count()", metricName),
+							Query:      fmt.Sprintf("max:trace.django.request.hits{service:%s*, http.status_code:2*, resource_name:%s} by {resource_name}.as_count()", serviceName, metricName),
 							Name:       datadog.PtrString("a"),
 						}},
 				},

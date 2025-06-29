@@ -36,14 +36,22 @@ The following environment variables must be set for Datadog API authentication:
 ### Optional Parameters
 
 - **START_DATE**: Start date timestamp in milliseconds
-  - Default: `1719525600000` (2024-06-28 00:00:00)
+  - Default: 18 months before END_DATE (calculated dynamically)
   - Can be provided as command-line flag: `-START_DATE=timestamp`
   - Or as environment variable: `START_DATE=timestamp`
 
 - **END_DATE**: End date timestamp in milliseconds
-  - Default: `1751061600000` (2025-06-28 00:00:00)
+  - Default: Today at midnight UTC (calculated dynamically)
   - Can be provided as command-line flag: `-END_DATE=timestamp`
   - Or as environment variable: `END_DATE=timestamp`
+
+- **SERVICE**: Service name prefix to filter
+  - Default: `badoom`
+  - Can be provided as command-line flag: `-SERVICE=service_name`
+  - Or as environment variable: `SERVICE=service_name`
+  - Note: Automatically appends `*` to match any service starting with this prefix
+
+**Note**: If neither START_DATE nor END_DATE is specified, the tool automatically searches the last 18 months of data (from 18 months ago to today).
 
 ## Usage Examples
 
@@ -54,7 +62,7 @@ The following environment variables must be set for Datadog API authentication:
 DD_API_KEY=your_api_key \
 DD_APP_KEY=your_app_key \
 DD_SITE=datadoghq.com \
-RESOURCE_FILTER='*admin*' \
+RESOURCE_FILTER='/admin/auth/user' \
 go run main.go
 ```
 
@@ -67,7 +75,7 @@ export DD_APP_KEY=your_app_key
 export DD_SITE=datadoghq.com
 
 # Run with command-line flag
-go run main.go -RESOURCE_FILTER='*admin*'
+go run main.go -RESOURCE_FILTER='/admin/auth/user'
 ```
 
 ### Custom Date Range
@@ -76,7 +84,7 @@ go run main.go -RESOURCE_FILTER='*admin*'
 DD_API_KEY=your_api_key \
 DD_APP_KEY=your_app_key \
 DD_SITE=datadoghq.com \
-RESOURCE_FILTER='*admin*' \
+RESOURCE_FILTER='/admin/auth/user' \
 START_DATE=1720000000000 \
 END_DATE=1730000000000 \
 go run main.go
@@ -91,18 +99,31 @@ export DD_APP_KEY=your_app_key
 export DD_SITE=datadoghq.com
 
 # Resource filter as environment variable, dates as flags
-RESOURCE_FILTER='*api*' go run main.go -START_DATE=1720000000000 -END_DATE=1730000000000
+RESOURCE_FILTER='/api/v1/products' go run main.go -START_DATE=1720000000000 -END_DATE=1730000000000
+```
+
+### Custom Service Name
+
+```bash
+# Query a different service (e.g., "myapp" instead of "badoom")
+DD_API_KEY=your_api_key \
+DD_APP_KEY=your_app_key \
+DD_SITE=datadoghq.com \
+RESOURCE_FILTER='/api/v1/users' \
+SERVICE='myapp' \
+go run main.go
 ```
 
 ## Query Details
 
-The application queries the following Datadog metric:
+The application uses a binary search algorithm to find the most recent activity:
 - **Metric**: `trace.django.request.hits`
-- **Service**: `badoom*`
+- **Service**: Configurable via SERVICE parameter (default: `badoom*`)
 - **HTTP Status Codes**: `2*` (all 2xx success codes)
-- **Resource Name**: Filtered by the RESOURCE_FILTER parameter
+- **Resource Name**: Converted from URL path to Datadog metric format
 - **Aggregation**: Maximum values grouped by resource_name
 - **Interval**: Daily (84600000 ms)
+- **Search Method**: Binary search to efficiently find the most recent non-null value
 
 ## Output
 
@@ -133,7 +154,7 @@ go build -o doggy_bad main.go
 DD_API_KEY=your_api_key \
 DD_APP_KEY=your_app_key \
 DD_SITE=datadoghq.com \
-RESOURCE_FILTER='*admin*' \
+RESOURCE_FILTER='/admin/auth/user' \
 ./doggy_bad
 ```
 
