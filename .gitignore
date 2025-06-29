@@ -78,3 +78,7 @@ coverage.html
 # Local configuration
 config.local.yaml
 config.local.json
+
+# Files containing sensitive data
+prompt.md
+prompt*.md
