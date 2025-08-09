@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ type MetricResult struct {
 	LastSeenTimestamp int64       `json:"last_seen_timestamp"`
 	LastSeenDate      string      `json:"last_seen_date"`
 	Value             interface{} `json:"value"`
+	Score             *float64    `json:"score,omitempty"`
 }
 
 // Result wraps the array of metric results
@@ -55,8 +57,47 @@ func parseDate(dateStr string, defaultValue int64) int64 {
 	return parsed
 }
 
+// calculateObsolescenceScore calculates a score (0-100) indicating how obsolete a metric is
+// Higher scores indicate more obsolete metrics (old + low usage)
+func calculateObsolescenceScore(lastSeenTimestamp int64, value interface{}) float64 {
+	currentTime := time.Now().Unix() * 1000 // Current time in milliseconds
+
+	// Calculate age in months
+	ageMs := float64(currentTime - lastSeenTimestamp)
+	ageMonths := ageMs / (30 * 24 * 60 * 60 * 1000) // Convert to months
+
+	// Age score: 0-100, where 100 means 5+ months old
+	ageScore := math.Min(100, (ageMonths/5)*100)
+
+	// Convert value to float64
+	var numValue float64
+	switch v := value.(type) {
+	case float64:
+		numValue = v
+	case float32:
+		numValue = float64(v)
+	case int:
+		numValue = float64(v)
+	case int64:
+		numValue = float64(v)
+	case int32:
+		numValue = float64(v)
+	default:
+		numValue = 1 // Default to 1 if we can't parse
+	}
+
+	// Value score: 0-100, where 100 means value is close to 1 (low usage)
+	// Uses logarithmic scale: value=1 -> 100, value=10 -> 80, value=100 -> 60, etc.
+	valueScore := math.Max(0, 100-math.Log10(math.Max(numValue, 1))*20)
+
+	// Combined score: 70% age weight, 30% value weight
+	finalScore := (ageScore * 0.7) + (valueScore * 0.3)
+
+	return math.Round(finalScore*100) / 100 // Round to 2 decimal places
+}
+
 // findLastNonNullValues processes the Datadog API response and returns the last non-null timestamp for each metric
-func findLastNonNullValues(resp datadogV2.TimeseriesFormulaQueryResponse) Result {
+func findLastNonNullValues(resp datadogV2.TimeseriesFormulaQueryResponse, calculateScore bool) Result {
 	var results []MetricResult
 
 	// Check if we have the expected data structure
@@ -65,7 +106,7 @@ func findLastNonNullValues(resp datadogV2.TimeseriesFormulaQueryResponse) Result
 	}
 
 	attrs := resp.Data.Attributes
-	
+
 	// Get series, times, and values
 	series := attrs.Series
 	times := attrs.Times
@@ -104,13 +145,21 @@ func findLastNonNullValues(resp datadogV2.TimeseriesFormulaQueryResponse) Result
 			// Convert timestamp to human-readable date in GMT
 			lastSeenTime := time.Unix(lastTimestamp/1000, 0).UTC()
 			lastSeenDate := lastSeenTime.Format("2006-01-02 15:04:05 MST")
-			
-			results = append(results, MetricResult{
+
+			result := MetricResult{
 				Metric:            metricName,
 				LastSeenTimestamp: lastTimestamp,
 				LastSeenDate:      lastSeenDate,
 				Value:             lastValue,
-			})
+			}
+
+			// Calculate score if requested
+			if calculateScore {
+				score := calculateObsolescenceScore(lastTimestamp, lastValue)
+				result.Score = &score
+			}
+
+			results = append(results, result)
 		}
 	}
 
@@ -123,15 +172,23 @@ func main() {
 	var endDateStr string
 	var resourceFilter string
 	var serviceName string
+	var scoreFlag bool
 	flag.StringVar(&startDateStr, "START_DATE", "", "Start date timestamp in milliseconds")
 	flag.StringVar(&endDateStr, "END_DATE", "", "End date timestamp in milliseconds")
 	flag.StringVar(&resourceFilter, "RESOURCE_FILTER", "", "Resource name filter (e.g., *admin*)")
 	flag.StringVar(&serviceName, "SERVICE", "", "Service name prefix (default: badoom)")
+	flag.BoolVar(&scoreFlag, "score", false, "Calculate obsolescence score for each metric")
 	flag.Parse()
 
-	// Default dates
-	defaultStartDate := int64(1719525600000)
-	defaultEndDate := int64(1751061600000) // 2025-03-01 00:00:00
+	// Calculate default dates
+	now := time.Now()
+	// Today at midnight local time, then convert to UTC for consistent handling
+	todayMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	defaultEndDate := todayMidnight.Unix() * 1000 // Convert to milliseconds
+
+	// One year ago from today at midnight
+	oneYearAgo := todayMidnight.AddDate(-1, 0, 0) // Subtract 1 year
+	defaultStartDate := oneYearAgo.Unix() * 1000  // Convert to milliseconds
 
 	// Override if START_DATE env var is set
 	if envStartDate := os.Getenv("START_DATE"); envStartDate != "" && startDateStr == "" {
@@ -202,8 +259,8 @@ func main() {
 						},
 					},
 				},
-				From:     startDate,
-				Interval: datadog.PtrInt64(84600000), // 1 day
+				From: startDate,
+				//Interval: datadog.PtrInt64(84600000), // 1 day
 				Queries: []datadogV2.TimeseriesQuery{
 					datadogV2.TimeseriesQuery{
 						MetricsTimeseriesQuery: &datadogV2.MetricsTimeseriesQuery{
@@ -225,11 +282,15 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Full HTTP response: %v\n", r)
 	}
 
-	responseContent, _ := json.MarshalIndent(resp, "", "  ")
-	fmt.Fprintf(os.Stdout, "Response from `MetricsApi.QueryTimeseriesData` for %s:\n%s\n", metricName, responseContent)
+	// responseContent, _ := json.MarshalIndent(resp, "", "  ")
+	// fmt.Fprintf(os.Stdout, "Response from `MetricsApi.QueryTimeseriesData` for %s:\n%s\n", metricName, responseContent)
 
 	// Process the response to find last non-null values
-	result := findLastNonNullValues(resp)
+	result := findLastNonNullValues(resp, scoreFlag)
 	resultJSON, _ := json.MarshalIndent(result, "", "  ")
-	fmt.Printf("\nLast seen values:\n%s\n", resultJSON)
+	if scoreFlag {
+		fmt.Printf("\n%s\n", resultJSON)
+	} else {
+		fmt.Printf("\nLast seen values:\n%s\n", resultJSON)
+	}
 }

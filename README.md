@@ -50,7 +50,7 @@ go build -o doggy_bad main.go
 ### Basic Usage
 
 ```bash
-# Check admin endpoint activity in the last 18 months
+# Check admin endpoint activity in the last 12 months
 DD_API_KEY=your_api_key \
 DD_APP_KEY=your_app_key \
 DD_SITE=datadoghq.com \
@@ -61,18 +61,87 @@ RESOURCE_FILTER='/admin/auth/user' \
 ### Example Output
 
 ```
-=== Starting Binary Search for metric: admin/auth/user ===
-Date range: 28/12/2023 to 28/06/2025
+Using START_DATE: 1719525600000 (2024-06-28 00:00:00)
+Using END_DATE: 1751061600000 (2025-06-28 00:00:00)
+Using RESOURCE_FILTER path: *admin/address_rules/merchantaddressrule*
+Converted to Datadog metric: *admin/address_rules/merchantaddressrule*
+Using SERVICE: badoom*
 
-[Depth 0] Searching range: 2023-12-28 to 2025-06-28
-[Depth 1] Searching upper half...
-Found value: 157 at 15 March 2024 14:30:25 UTC
+Querying for metric: *admin/address_rules/merchantaddressrule*
+Response from `MetricsApi.QueryTimeseriesData` for *admin/address_rules/merchantaddressrule*:
+{
+  "data": {
+    "attributes": {
+      "series": [
+        {
+          "group_tags": [
+            "resource_name:get_admin/address_rules/merchantaddressrule/_path:object_id_/change/"
+          ],
+          "query_index": 0,
+          "unit": [
+            {
+              "family": "cache",
+              "id": 39,
+              "name": "hit",
+              "plural": "hits",
+              "scale_factor": 1,
+              "short_name": ""
+            },
+            {}
+          ]
+        },
+        {
+          "group_tags": [
+            "resource_name:get_admin/address_rules/merchantaddressrule/"
+          ],
+          "query_index": 0,
+          "unit": [
+            {
+              "family": "cache",
+              "id": 39,
+              "name": "hit",
+              "plural": "hits",
+              "scale_factor": 1,
+              "short_name": ""
+            },
+            {}
+          ]
+        }
+      ],
+      "times": [
+        1739361600000
+      ],
+      "values": [
+        [
+          1
+        ],
+        [
+          1
+        ]
+      ]
+    },
+    "id": "0",
+    "type": "timeseries_response"
+  }
+}
 
-=== Binary Search Results ===
-⚠️  WARNING: Found recent activity for metric: admin/auth/user
-   Last seen: 15 March 2024 14:30:25 UTC
-   Value: 157
-   Timestamp: 1710509425000
+Last seen values:
+{
+  "result": [
+    {
+      "metric": "resource_name:get_admin/address_rules/merchantaddressrule/_path:object_id_/change/",
+      "last_seen_timestamp": 1739361600000,
+      "last_seen_date": "2025-02-12 12:00:00 UTC",
+      "value": 1
+    },
+    {
+      "metric": "resource_name:get_admin/address_rules/merchantaddressrule/",
+      "last_seen_timestamp": 1739361600000,
+      "last_seen_date": "2025-02-12 12:00:00 UTC",
+      "value": 1
+    }
+  ]
+}
 ```
 
 ## 📋 Parameters
@@ -81,9 +150,10 @@ Found value: 157 at 15 March 2024 14:30:25 UTC
 - **RESOURCE_FILTER**: URL path to analyze (e.g., `/admin/auth/user`)
 
 ### Optional
-- **START_DATE**: Start timestamp in milliseconds (default: 18 months ago)
-- **END_DATE**: End timestamp in milliseconds (default: today)
+- **START_DATE**: Start timestamp in milliseconds (default: one year ago at midnight)
+- **END_DATE**: End timestamp in milliseconds (default: today at midnight)
 - **SERVICE**: Service name prefix (default: `badoom`)
+- **--score**: Enable obsolescence scoring to identify unused endpoints
 
 ### Environment Variables
 - **DD_API_KEY**: Your Datadog API key
@@ -110,6 +180,79 @@ END_DATE=1735689600000 \
 ./doggy_bad
 ```
 
+### Obsolescence Scoring Analysis
+```bash
+# Get obsolescence scores for admin endpoints
+RESOURCE_FILTER='*admin*' ./doggy_bad --score
+
+# Identify highly obsolete endpoints with detailed scoring
+DD_API_KEY=your_api_key \
+DD_APP_KEY=your_app_key \
+DD_SITE=datadoghq.com \
+RESOURCE_FILTER='*admin/address_rules*' \
+./doggy_bad --score
+```
+
+## 📊 Obsolescence Scoring
+
+The `--score` flag enables advanced analysis to identify potentially obsolete endpoints using a sophisticated scoring algorithm.
+
+### How Scoring Works
+
+The obsolescence score (0-100) combines two factors:
+
+1. **Age Factor** (70% weight): How long since last activity
+   - Score increases linearly with age
+   - 100 points = 5+ months old
+   - 0 points = recent activity
+
+2. **Value Factor** (30% weight): Usage intensity  
+   - Higher scores for lower usage values
+   - Uses logarithmic scale: value=1 → 100 points, value=10 → 80 points, value=100 → 60 points
+
+**Formula**: `final_score = (age_score × 0.7) + (value_score × 0.3)`
+
+### Score Interpretation
+
+| Score Range | Status | Description |
+|-------------|---------|-------------|
+| **90-100** | 🔴 **Highly Obsolete** | 5+ months old with minimal usage (≤5 hits) |
+| **70-89** | 🟡 **Likely Obsolete** | Either very old OR very low usage |
+| **40-69** | 🟠 **Moderate Risk** | Moderately old with some usage |
+| **0-39** | 🟢 **Active/Recent** | Recent activity or high usage |
+
+### Example Output with Scoring
+
+```bash
+RESOURCE_FILTER='*admin*' ./doggy_bad --score
+```
+
+```json
+{
+  "result": [
+    {
+      "metric": "resource_name:get_admin/address_rules/merchantaddressrule/",
+      "last_seen_timestamp": 1739361600000,
+      "last_seen_date": "2025-02-12 12:00:00 UTC",
+      "value": 1,
+      "score": 100
+    }
+  ]
+}
+```
+
+This endpoint scores **100** (highly obsolete) because:
+- ⏰ **Age**: Last accessed months ago (high age score)
+- 📊 **Usage**: Only 1 hit recorded (high value score)
+- 🎯 **Recommendation**: Strong candidate for removal
+
+### Best Practices
+
+- **Score ≥ 90**: Review for removal - likely unused legacy endpoints
+- **Score 70-89**: Investigate usage patterns - may be seasonal or edge-case endpoints  
+- **Score 40-69**: Monitor for trends - consider consolidation opportunities
+- **Score < 40**: Active endpoints - focus optimization efforts here
+
 ## 🔧 Advanced Configuration
 
 The tool supports flexible configuration through command-line flags or environment variables:
@@ -118,11 +261,18 @@ The tool supports flexible configuration through command-line flags or environme
 # Using command-line flags
 ./doggy_bad -RESOURCE_FILTER='/admin/users' -SERVICE='backend' -START_DATE=1704067200000
 
+# Using command-line flags with scoring
+./doggy_bad -RESOURCE_FILTER='*admin*' --score
+
 # Using environment variables  
 export DD_API_KEY=your_key
 export RESOURCE_FILTER='/api/health'
 export SERVICE='frontend'
 ./doggy_bad
+
+# Mixed approach with scoring
+export DD_API_KEY=your_key
+./doggy_bad -RESOURCE_FILTER='*deprecated*' --score
 ```
 
 ## 📖 Documentation
@@ -142,7 +292,7 @@ For detailed documentation, build instructions, and advanced usage examples, see
 - **Algorithm**: Binary search for efficient date range queries
 - **API**: Datadog Metrics API v2
 - **Output**: Human-readable console output + structured JSON
-- **Time Range**: Configurable with smart defaults (18 months)
+- **Time Range**: Configurable with smart defaults (last 12 months)
 
 ## 🤝 Contributing
 
@@ -154,7 +304,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🔒 Security
 
-⚠️ **Important**: Never commit API keys to version control. Use environment variables or secure secret management systems.
+⚠️ **Important**: Never commit API keys (DD_APP_KEY or DD_API_KEY) to version control. Use environment variables or secure secret management systems.
 
 ---
 

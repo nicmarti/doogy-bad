@@ -36,12 +36,12 @@ The following environment variables must be set for Datadog API authentication:
 ### Optional Parameters
 
 - **START_DATE**: Start date timestamp in milliseconds
-  - Default: 18 months before END_DATE (calculated dynamically)
+  - Default: One year ago at midnight (calculated dynamically)
   - Can be provided as command-line flag: `-START_DATE=timestamp`
   - Or as environment variable: `START_DATE=timestamp`
 
 - **END_DATE**: End date timestamp in milliseconds
-  - Default: Today at midnight UTC (calculated dynamically)
+  - Default: Today at midnight (calculated dynamically)
   - Can be provided as command-line flag: `-END_DATE=timestamp`
   - Or as environment variable: `END_DATE=timestamp`
 
@@ -51,7 +51,13 @@ The following environment variables must be set for Datadog API authentication:
   - Or as environment variable: `SERVICE=service_name`
   - Note: Automatically appends `*` to match any service starting with this prefix
 
-**Note**: If neither START_DATE nor END_DATE is specified, the tool automatically searches the last 18 months of data (from 18 months ago to today).
+- **--score**: Enable obsolescence scoring analysis
+  - Command-line flag only: `--score`
+  - When enabled, calculates a score (0-100) for each metric indicating how obsolete it is
+  - Higher scores indicate endpoints that are likely unused (old + low usage)
+  - Useful for identifying endpoints that can be safely deprecated
+
+**Note**: If neither START_DATE nor END_DATE is specified, the tool uses a default range of the last 12 months (both calculated dynamically from today's date).
 
 ## Usage Examples
 
@@ -114,6 +120,24 @@ SERVICE='myapp' \
 go run main.go
 ```
 
+### Obsolescence Scoring
+
+```bash
+# Basic scoring analysis
+DD_API_KEY=your_api_key \
+DD_APP_KEY=your_app_key \
+DD_SITE=datadoghq.com \
+RESOURCE_FILTER='*admin*' \
+go run main.go --score
+
+# Scoring with built binary
+DD_API_KEY=your_api_key \
+DD_APP_KEY=your_app_key \
+DD_SITE=datadoghq.com \
+RESOURCE_FILTER='*admin/address_rules/merchantaddressrule*' \
+./doggy_bad --score
+```
+
 ## Query Details
 
 The application uses a binary search algorithm to find the most recent activity:
@@ -133,6 +157,57 @@ The tool outputs:
    - Time series data for matching resources
    - Resource names in group tags
    - Hit counts and metrics metadata
+
+### Standard Output Format
+
+```json
+{
+  "result": [
+    {
+      "metric": "resource_name:get_admin/auth/user/",
+      "last_seen_timestamp": 1739361600000,
+      "last_seen_date": "2025-02-12 12:00:00 UTC",
+      "value": 5
+    }
+  ]
+}
+```
+
+### Scoring Output Format (with --score flag)
+
+```json
+{
+  "result": [
+    {
+      "metric": "resource_name:get_admin/auth/user/",
+      "last_seen_timestamp": 1739361600000,
+      "last_seen_date": "2025-02-12 12:00:00 UTC", 
+      "value": 1,
+      "score": 100
+    }
+  ]
+}
+```
+
+### Scoring Algorithm
+
+When `--score` flag is used, each metric receives an obsolescence score (0-100):
+
+- **Age Factor** (70% weight): Based on time since last activity
+  - 0 points = recent activity
+  - 100 points = 5+ months old
+  
+- **Value Factor** (30% weight): Based on usage intensity
+  - 100 points = value ≤ 1 (minimal usage)
+  - Decreases logarithmically for higher values
+  
+- **Final Score**: `(age_score × 0.7) + (value_score × 0.3)`
+
+**Score Ranges:**
+- **90-100**: Highly obsolete (strong removal candidate)
+- **70-89**: Likely obsolete (investigate usage patterns)
+- **40-69**: Moderate risk (monitor trends)
+- **0-39**: Active/recent (focus optimization here)
 
 ## Error Handling
 
